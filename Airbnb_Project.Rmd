@@ -1,0 +1,822 @@
+---
+Data Analysis to provide business recommendations for Airbnbs in France.
+---
+
+# STEP 1: DATA PREPARATION & EXPLORATION
+## PART 1: MISSING VALUES
+```{r}
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(leaflet)
+library(mapview)
+library(sf)
+library(leaflet.extras)
+library(stopwords)
+library(tidytext)
+library(wordcloud)
+library(wordcloud2)
+library(tm)
+
+paris.nb <- read_csv("~/Desktop/BU-MSBA/Spring 2022/AD699 A2 Data Mining/Final Project/paris_listings.csv")
+paris.nb <- paris.nb %>% filter(host_neighbourhood=="Châtelet - Les Halles - Beaubourg")
+
+# Data Cleaning
+paris.nb <- subset(paris.nb, select = -c(neighbourhood_group_cleansed,
+                                         bathrooms,
+                                         calendar_updated))
+paris.nb$bedrooms[is.na(paris.nb$bedrooms)] <- round(mean(paris.nb$bedrooms, na.rm=TRUE))
+
+mode <- function(v) {
+  uniqv <- unique(v)
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+paris.nb$beds[is.na(paris.nb$beds)] <- mode(paris.nb$beds)
+
+paris.nb <- paris.nb[!(is.na(paris.nb$review_scores_value)),]
+
+clean.nb <- select(paris.nb, name, host_response_time,host_acceptance_rate, neighborhood_overview, 
+                   neighbourhood_cleansed, latitude, longitude, property_type,room_type, accommodates,
+                   bathrooms_text, bedrooms, beds, amenities, price, minimum_nights, maximum_nights, 
+                   availability_365, number_of_reviews, instant_bookable, review_scores_rating, 
+                   reviews_per_month )
+
+clean.nb$bathrooms_text[clean.nb$bathrooms_text=='Half-bath'] <- "0.5 bath"
+clean.nb$bathrooms_text[clean.nb$bathrooms_text=='Shared half-bath'] <- "0.5 shared bath"
+clean.nb <- clean.nb %>% separate(bathrooms_text, c("bathrooms","bath_type"), sep=" ")
+clean.nb$bathrooms <- as.numeric(clean.nb$bathrooms)
+
+```
+We removed missing values from the dataset for certain variables. One of these variables was “bedrooms”. We created a mean number from this column and replaced “NA” values with this average. Next, we created a function to find the mode of the “beds” variables, and replaced the “NA” values with this mode that was created by using “unique”, and “tabulate”. When comparing rentals, it is not realistic to have values that are not integers, as you cannot have 1.5 or 2.5 beds. We also removed the “NA” values for “review_scores_value”. We did this so that the review scores would not be skewed, and so we could compare listings that had received reviews and ratings. We want to be able to look at developed rentals that have received review scores. 
+
+##PART 2: SUMMARY STATISTICS
+```{r}
+summary(clean.nb$price)
+```
+
+```{r}
+summary(clean.nb$accommodates)
+```
+
+```{r}
+summary(clean.nb$bedrooms)
+```
+
+```{r}
+summary(clean.nb$bathrooms)
+```
+
+```{r}
+summary(clean.nb$beds)
+```
+
+```{r}
+###price
+median(clean.nb$price, na.rm=TRUE)
+mean(clean.nb$price, na.rm=TRUE)
+max(clean.nb$price, na.rm=TRUE)
+min(clean.nb$price, na.rm=TRUE)
+```
+```{r}
+###review_scores_rating
+mean(clean.nb$review_scores_rating, na.rm=TRUE)
+```
+With such a large dataset, there are many questions we had about our neighborhood. One of the most important questions we agreed on was, “what is the mean, median, maximum and minimum price within our dataset?”. Everyone is interested in price, and how much accommodation may be when traveling. The median price was $110, whilst the mean price was $138.25. This means that we can expect the distribution of price to be positively skewed. The maximum price is $1,035, which you can expect to be a very luxurious rental. And the minimum price was $25, which could be something similar to a “backpackers” or “shared space” rental. With that being said, we can also see that the minimum accommodation/rental is 1, and the max is 16, with the mean being 3.37.
+
+How many bedrooms can we expect then based on these accommodation sizes from our data? The mean is 1.30 bedrooms, whilst the mean number of beds provided is 1.84. Paris is known for its small apartments, which explains that there may be two beds in one room.
+
+We also wanted to know; “What is the average review score rating?”. Are we dealing with a neighborhood with high or low ratings? This kind of information would inform us whether or not rentals, and their owners are of high quality or not, and whether guests enjoy staying there. The mean review score rating is 4.67, which is very high when you are looking for rentals. We can gather from this high rating, that people enjoy staying in this neighborhood.
+
+
+
+
+##PART 3: DATA VISUALIZATION
+```{r}
+### Graph 1 
+#### Shows average bathroom count 
+beds <- ggplot(clean.nb, aes(x=beds, color="red")) + geom_freqpoly() +
+    ggtitle("Average Number of Beds in Rentals")
+beds + labs(x="Number of Beds Per Rental", y="Count of Rentals")
+```
+Graph 1 was created by using a freqpoly ggplot graph. This graph shows that most rentals only contain one bed. The frequency of a rental containing only one bed is over 500. As the number of beds increases, more frequency of rentals containing that amount of beds decreases. This shows that we are dealing with relatively small rentals, that are studios or one bed one bath type of properties. 
+
+```{r}
+### Graph 2 
+#### Shows as minimum nights increases, prices decrease
+min_nights <- ggplot(clean.nb, aes(x=minimum_nights, y=price, color="red")) + geom_smooth()
+min_nights + labs(title = "Price Per Minimum Required Length of Stay", x = "Number of Rentals",
+             y= "Price Per Rental")
+```
+Graph 2 was created using geom_smooth, with the intention to show that as the minimum amount of nights required to stay at a rental increases the price decreases. This is because the owners are looking for a long term tenant, and to attract this type of tenant they will need to lower their price. Whereas, rentals with minimum required nights below 10 are seen to have a higher price. This is because willingness to pay is higher, when people are looking for short term accommodations. These types of customers also are normally on a time crunch, where they are not too picky about price or the rental.
+
+```{r}
+### Graph 3
+#### Apartments with more reviews/month are seen to have higher ratings 
+review <- ggplot(clean.nb, aes(x=review_scores_rating, color="red")) +geom_histogram()
+review + labs(title = "Average Review Rating", x = "Review Rating",
+             y= "Amount of Rentals")
+```
+Graph 3 relates to our conclusions in Summary Statistics, as we see the majority of rentals being placed in bins above 4, and very close to score 5. This variable is slightly skewed to the left. There are hardly any rentals that are seen to have average ratings scores below 4.
+
+```{r}
+### Graph 4
+#### Shows price/neighborhood
+b <- ggplot(clean.nb, aes(x=neighbourhood_cleansed, y=price)) + geom_boxplot()
+b <- b + coord_flip()
+b + labs(title = "Prices of Rentals Per Neighborhood", x = "Neighborhoods", y = "Price")
+```
+Graph 4 is a boxplot used to see which parts of the neighborhood charge the highest and lowest prices. Elysee has the highest mean price per rental. Temple and Bourse are seen to have the most outliers in terms of higher prices, but some of the lowest mean prices. This means that these areas may be gentrifying. 
+
+```{r}
+### Graph 5 
+#### Price increases with as accommodation # increases
+point <- ggplot(clean.nb, aes(x=accommodates, y=price, color=bedrooms))+geom_point()
+point 
+point + labs(title = "Price Per Accommodation Party Size", x = "Number of People the Rental Accommodates",
+             y= "Price")
+```
+Graph 5 is a point graph that was created to see whether prices of rentals increased when the size of the party (people staying) increased. We can confirm that there is a positive correlation between the size of the party and the price. Generally, as the size of the rental increases, the price will increase. 
+
+##PART 4: MAPPING
+### Geom Map
+```{r}
+mapview(clean.nb, xcol = "longitude", ycol = "latitude", crs = 4269, grid = FALSE)
+```
+The Geom Map shows that there is a large cluster of properties very close to the center of Pairs, and slightly North East of the city. This is where the majority of our neighborhoods properties are seen to be located. Our map only has a few outliers, which is probably because it is hard to compete with other rentals located closer to Paris city center. A key feature that stands out is that a lot of the rentals seem to follow along the river line, which will be sought after due to views. 
+
+### Heatmap
+```{r}
+heat_df <- select(paris.nb, name, host_response_time,host_acceptance_rate, neighborhood_overview, neighbourhood_cleansed, latitude, longitude, property_type,room_type, accommodates,bathrooms_text, bedrooms, beds, amenities, price, minimum_nights, maximum_nights, availability_365, number_of_reviews, instant_bookable, review_scores_rating, reviews_per_month,host_location,host_total_listings_count,host_neighbourhood )
+```
+
+```{r}
+leaflet(heat_df) %>%
+  addProviderTiles(providers$Stamen.Toner) %>%
+  setView(2.349014, 48.864716, 12 ) %>%
+  addHeatmap(
+    lng = ~longitude, lat = ~latitude, intensity = ~host_total_listings_count,
+    blur = 20, max = 0.05, radius = 15)
+```
+
+```{r}
+ggplot(heat_df, aes(host_neighbourhood,property_type)) +                       
+  geom_tile(aes(fill = host_total_listings_count))
+```
+The heat map shows that the majority of our neighborhoods rentals are based right around the heart of Paris. There is more density of rentals nearer Paris, than further away. The majority of properties are also seen to be slightly North East of Paris, with a few small clusters ("heat spots") further away from the city. The heat map shows that our data is very central to Paris, which is a great way to learn more about the location of the rentals, and especially where more rentals are listed due to the density of the "heat spots". 
+
+##PART 5: WORDCLOUD
+```{r}
+freq_nb <- clean.nb$neighborhood_overview
+docs <- Corpus(VectorSource(freq_nb))
+
+docs_nb <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace)
+docs_nb <- tm_map(docs_nb, content_transformer(tolower))
+docs_nb <- tm_map(docs_nb, removeWords, stopwords("english"))
+
+dtm <- TermDocumentMatrix(docs_nb) 
+matrix <- as.matrix(dtm) 
+words <- sort(rowSums(matrix),decreasing=TRUE) 
+df <- data.frame(word = names(words),freq=words)
+
+wordcloud(words = df$word, freq = df$freq, min.freq = 1,max.words=30, random.order=FALSE, rot.per=0.35,colors=brewer.pal(8, "Dark2"))
+
+```
+
+
+The word cloud shows that our neighborhood is the “center of paris”.There are seen to be a lot of restaurants/bars in the Parisian neighborhood, as well as it being an historic district with the "Louvre" being mentioned. *Quartier as a noun translates to neighborhood. Our neighborhood seems to be very quaint and within "walking” distance to Paris. 
+
+
+#STEP 2: PREDICTION 
+### Remove some variables without predictive power
+```{r}
+nb1 <- subset(clean.nb, select = -c(name, host_response_time, neighborhood_overview,
+                                    neighbourhood_cleansed, property_type, room_type, 
+                                    bath_type, amenities, instant_bookable))
+
+str(nb1)
+```
+
+### Change to num variable
+```{r}
+nb1$host_acceptance_rate = as.numeric(nb1$host_acceptance_rate)
+nb1$bathrooms = as.numeric(nb1$bathrooms)
+```
+
+### divide into training set and validation set
+```{r}
+set.seed(210)
+nb2 <- runif(nrow(nb1))
+train <- subset(nb1, nb2 <= 0.6)
+valid <- subset(nb1, nb2 > 0.6)
+train.df <- train[complete.cases(train), ]
+valid.df <- valid[complete.cases(valid), ]
+```
+
+## A. Describe the process of evaluating the quality of model.
+First we create a subset of variables that have no predictive power, such as name, host_response_time, neighborhood_overview, and so on. And we also converted some variables into numeric variables. After that, we divide the dataset into training set (60%) and validation set (40%) because we need to build a multiple regression model on the training set and use the validation set to evaluate the performance of the model. Then, we remove all the missing values.
+
+Our first multiple regression model (model) is built on all variables of the data set (train.df), setting "price" as the response variable with an adjusted R-squared of 0.5145, which indicates that 51.45% of the data can be explained by this model.
+
+We then used a backward elimination model to help us identify meaningful explanatory variables and find the best model, and the results suggested using host_acceptance_rate, latitude, accommodates, bathrooms, bedrooms, maximum_nights, availability_ 365, review_scores_rating and reviews_per_month as explanatory variables because it has the lowest AIC (2985.88), which suggests that this model fits the dataset better than the others. 
+
+Then we selected significant variables with "*" to build model3. The R-squared after this adjustment becomes 0.5045, which means that 50.45% of the data points can be explained by this model.
+
+
+### multiple regression model
+```{r}
+model <- lm(price~., data=train.df)
+summary(model)
+```
+### backward elimination
+```{r}
+step.model <- step(model, direction = "backward")
+
+model2 <- lm(price~ host_acceptance_rate + latitude + accommodates + bathrooms + 
+               bedrooms + maximum_nights + availability_365 + review_scores_rating + 
+               reviews_per_month, data=train.df)
+summary(model2)
+```
+
+### best model
+```{r}
+model3 <- lm(price~ host_acceptance_rate + bathrooms + bedrooms + availability_365 + 
+               reviews_per_month, data=train.df)
+summary(model3)
+```
+## B. Explain the regression equation.
+We can see that bathrooms, bedrooms, availability_365, reviews_per_month are all very significant variables. Taking bedrooms as an example, the regression equation is Price = host_acceptance_rate * 42.0601 + bathrooms * 39.1327 + bedrooms * 77.7657 + availability_365 * 0.1298 - reviews_per_month * 11.9698 - 38.4481. We can see that the number of bedrooms is positively correlated with the price, as the number of bedrooms increases, the price increases linearly.
+
+### RMSE
+```{r}
+library(forecast)
+
+pred1 <- predict(model3, train.df)
+accuracy(pred1, train.df$price)
+
+pred2 <- predict(model3, valid.df)
+accuracy(pred2, valid.df$price)
+```
+## C. Analyze any other metrics - RMSE
+The RMSE using the training dataset (model3) is 67.84987, while the RMSE using the validation dataset (model2) is 69.44766. because the RMSE represents the root mean square error, which measures how far away from the regression line data points are. We can see that the RMSE is very small, which indicates better fit.
+
+
+#STEP 3: CLASSIFICATION
+##PART 1: KNN
+### k-nearest neighbors
+```{r}
+knn_clean.nb <- clean.nb
+knn_clean.nb[,"required_amenities"] <- grepl("Wifi", clean.nb$amenities, ignore.case=T) & 
+  grepl("Dryer", clean.nb$amenities, ignore.case=T) &
+  grepl("Washer", clean.nb$amenities, ignore.case=T) &
+  grepl("Hair Dryer", clean.nb$amenities, ignore.case=T) &
+  grepl("TV", clean.nb$amenities, ignore.case=T) &
+  grepl("Coffee", clean.nb$amenities, ignore.case=T)
+```
+For this part, we set the output is a combination of amenities based on our request of airbnb. We used & here to see if the rental has all of these amenities.
+
+```{r}
+knn_clean.nb$required_amenities <- as.factor(knn_clean.nb$required_amenities)
+```
+The output has two levels, True and False. We need to change them to factor to run KNN model.
+
+```{r}
+summary(knn_clean.nb$required_amenities)
+```
+There are 381 rentals contain the combination of amenities.
+
+```{r}
+k_nn <- knn_clean.nb[,-c(2,3,4,5,6,7,8,9,12,15,21)]
+```
+We built a new dataset but remove some categorical variables and useless numeric variables.
+
+```{r}
+set.seed(120)
+knn_train <- sample_frac(k_nn,0.6)
+knn_valid <- setdiff(k_nn,knn_train)
+```
+We set train and valid set to run the model. Since we don't want the model has overfitting issue.
+
+```{r}
+train_noise <- knn_train
+train_noise <- train_noise %>% 
+  group_by(required_amenities) %>% 
+  select(c(2:13)) %>% 
+  summarise_if(is.numeric,mean)
+train_noise <- train_noise %>% rbind(round(((train_noise[2,]-train_noise[1,])/train_noise[1,])*100,2))
+train_noise
+```
+As the result shows above, only the difference of variable "reviews_scores_rating" is less than 5%. Hence, we just drop it. We excluded the interfering factors.
+
+```{r}
+knn_train <- knn_train[,-c(11)]
+knn_valid <- knn_valid[,-c(11)]
+k_nn <- k_nn[,-c(11)]
+```
+We removed the noise and created a fictitious rental within the range. We need this new rental later to predict whether it will have combination of amenities in our neighbourhood.
+
+```{r}
+cor(knn_train[2:11])
+```
+Since knn model needs to limit the predictors and it's influenced by multicollinearity. We need to concern the high correlation between variables and remove them. Then, we remove bedrooms, beds, and reviews_per_month.
+
+```{r}
+knn_train <- knn_train[,-c(4,5,11)]
+knn_valid <- knn_valid[,-c(4,5,11)]
+k_nn <- k_nn[,-c(4,5,11)]
+```
+
+```{r}
+fictitious_rental <- data.frame(name="fiction",
+                                accommodates=10,
+                                bathrooms=3.5,
+                                price=340,
+                                minimum_nights=25,
+                                maximum_nights=120,
+                                availability_365=250,
+                                number_of_reviews=320)
+```
+
+
+```{r}
+library(caret)
+k_nn.norm <- k_nn
+knn_train.norm <- knn_train
+knn_valid.norm <- knn_valid
+fictitious_rental.norm <- fictitious_rental
+knn_norm.values <- preProcess(knn_train[,2:8],method =c("center","scale"))
+knn_train.norm[,2:8] <- predict(knn_norm.values,knn_train[,2:8])
+knn_valid.norm[,2:8] <- predict(knn_norm.values,knn_valid[,2:8])
+k_nn.norm[,2:8] <- predict(knn_norm.values,k_nn[,2:8])
+fictitious_rental.norm <- predict(knn_norm.values,fictitious_rental)
+```
+We normalized the numerical variables of data sets: k_nn, train, valid, and new rental. 
+
+```{r}
+library(FNN)
+accuracy <- data.frame(k=seq(1,25,1),accuracy=rep(0,25))
+for(i in 1:25){
+  knn.pred <- knn(train=knn_train.norm[,2:8], test=knn_valid.norm[,2:8],
+                  cl=c(t(knn_train.norm[,9])), k=i)
+  accuracy[i,2] <- confusionMatrix(table(knn.pred, c(t(knn_valid.norm[,9]))))$overall[1]
+}
+accuracy[which.max(accuracy$accuracy),]
+```
+We test 25 possible ks and finally we got the 9 ks has highest accuracy. Hence, we will use k = 9 to predict the output of new rental.
+
+```{r}
+ggplot()+geom_point(aes(x=accuracy$k, y=accuracy$accuracy)) +
+  xlab("K")+
+  ylab("Accuracy")+
+  ggtitle("Optimal K-Value")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+You can see that when K equals 9, the accuracy is highest within the range 0-25.
+
+```{r}
+nine_nn <- knn(train=knn_train.norm[,2:8],test=fictitious_rental.norm[,2:8],
+                cl=c(t(knn_train.norm[,9])), k=9)
+nine_nn
+```
+The model predict that the new rental will have the combination of amenities in our neighborhood.
+
+```{r}
+row.names(knn_train)[attr(nine_nn,"nn.index")]
+```
+The 9 nearest neighborhoods.
+
+```{r}
+r_name <- row.names(knn_train)[attr(nine_nn,"nn.index")]
+nine.Neighbors <- k_nn[c(r_name),]
+nine.Neighbors
+```
+
+9 neighborhoods with names.
+
+Based on our cleaned data set, first, we chose several amenities as the output of the model. Then, we used all other numerical variables as our initial predictors. Next, we compared the differences between mean of numerical variables of two output levels (True and False). There is only one variable which is reviews_scores_rating that the difference is less than 5%. We considered it as a noise, which means we didn't need in our model. Then, we considered the high correlation pairs. The reasons are the knn model is affected by multicollinearity, and knn needs to limit the predictors. We got three pairs of high correlation pairs, and we removed bedrooms, beds, and reviews_per_month. All other left numerical varibals are our predictors.
+
+For the specific k value we chose, we experimented the accuracy of different k values from 0-25, then we found by function that when k equals 9, the accuracy is maximum. In addition, we tested the k values from 0-100 at the beginning. The result shew that when k equals 94, the accuracy is maximum, but we thought that 94 is too much for the model which made it look like unreasonable. Also, high values of k may miss local structure, even though it has less noise. Hence, we narrowed down the field to 0-25.
+
+##PART 2: NAIVE BAYES
+```{r}
+library(e1071)
+
+ay_df<- select(clean.nb, host_response_time,host_acceptance_rate, neighbourhood_cleansed,room_type, accommodates,bathrooms,bath_type, bedrooms,instant_bookable )
+str(ay_df)
+ay_df$accommodates <- as.factor(ay_df$accommodates) 
+ay_df$bedrooms <- as.factor(ay_df$bedrooms) 
+str(ay_df)
+
+set.seed(390)
+ay_train <- sample_frac(ay_df, 0.6)  
+ay_valid <- setdiff(ay_df, ay_train) 
+
+ay_df.nb <- naiveBayes(instant_bookable ~ ., data = ay_train)
+ay_df.nb
+```
+
+### Confusion matrix
+```{r}
+library(caret)
+### ay_training
+ay_train$instant_bookable <- as.factor(ay_train$instant_bookable)
+ay_valid$instant_bookable <- as.factor(ay_valid$instant_bookable)
+
+### class(ay_df.nb)
+pred.class_t <- predict(ay_df.nb, newdata = ay_train)
+# View()
+str(ay_train)
+str(pred.class_t)
+confusionMatrix(pred.class_t, ay_train$instant_bookable)
+### ay_validation
+pred.class_v <- predict(ay_df.nb, newdata = ay_valid)
+confusionMatrix(pred.class_v, ay_valid$instant_bookable)
+```
+
+```{r} 
+### try out location
+ay_df2<- select(clean.nb, host_response_time,host_acceptance_rate,room_type, accommodates,bathrooms,bath_type, bedrooms,instant_bookable )
+ay_df2$accommodates <- as.factor(ay_df$accommodates) 
+ay_df2$bedrooms <- as.factor(ay_df$bedrooms) 
+
+set.seed(390)
+ay_train2 <- sample_frac(ay_df2, 0.6)  
+ay_valid2 <- setdiff(ay_df2, ay_train2) 
+
+ay_df2.nb <- naiveBayes(instant_bookable ~ ., data = ay_train2)
+ay_df2.nb
+
+### confusion matrix
+ay_train2$instant_bookable <- as.factor(ay_train2$instant_bookable)
+ay_valid2$instant_bookable <- as.factor(ay_valid2$instant_bookable)
+
+### class(ay_df.nb)
+pred.class_t2 <- predict(ay_df2.nb, newdata = ay_train2)
+confusionMatrix(pred.class_t2, ay_train2$instant_bookable)
+### ay_validation
+pred.class_v2 <- predict(ay_df2.nb, newdata = ay_valid2)
+confusionMatrix(pred.class_v2, ay_valid2$instant_bookable)
+```
+
+
+### Fictional apartment
+```{r}
+fictional_ay<- data.frame(host_response_time='within an hour', host_acceptance_rate='1',
+                       neighbourhood_cleansed='Bourse',room_type='Private room',
+                       accommodates='4',bathrooms='1',bath_type='bath', bedrooms='2')
+pred.fictional_ay <- predict(ay_df.nb, newdata = fictional_ay)
+pred.fictional_ay
+pred.fictional_ay_prob <- predict(ay_df.nb, newdata = fictional_ay, type = "raw")
+pred.fictional_ay_prob
+
+```
+Instant Book listings allow you to book immediately without needing to send a request to the Host for approval, provided you’ve completed your account setup.
+There’s no additional fee, and it’s especially convenient for last-minute trips. 
+
+With these concepts in mind, we can easily filter out some irrelevant variables and choose the ones with potential high influence power.
+1.the host's attitude: host_response_time,host_acceptance_rate can reflect if the host is actively managing the platform, actively accepting guests.
+2.the room's attribute: for guests, room_type, accommodates,bathrooms,bath_type, bedrooms all matter. And these all can impacts the cleaning process, which is crucial to a room's readiness
+3.location: we were not sure of this variable at the beginning, so we re-run the model to see: the model with location factor has a higher accuracy, so We will include neighbourhood_cleansed as an input variable.
+
+With the model, we made up a fictional_ay apartment with relevant input variable information. And the model would predict it as instant bookable.
+
+##PART 3: CLASSIFICATION TREE
+### A.Bining the variable 
+```{r}
+tree_clean.nb <- clean.nb
+```
+
+```{r}
+ggplot(data = tree_clean.nb, aes(x= review_scores_rating))+
+  geom_histogram(color ="blue",fill='cornflowerblue')+
+  geom_vline(xintercept = 4.6381)+
+  geom_vline(xintercept = 4.86)
+```
+
+From the histgrom of review_scores_rating, we can see that the distribution of scores is very uneven, mainly concentrated between 4 and 5, so it is not reasonable to divide the scores into several parts equally like 0-1, 1-2, 2-3, 3-4, 4-5. So I decide to divide by the distribution of scores into three groups equally, respectively labeled with Low, Medium and High. Bining is an essential step in encoding a continuous or numerical variable into a categorical variable like review_scores_rating. Since numerical or continuous features do not work well with classification tree models, binning of these kind of variables tends to improve the performance of the model.
+
+```{r}
+quantile(tree_clean.nb$review_scores_rating, 0.33, na.rm = TRUE)
+quantile(tree_clean.nb$review_scores_rating, 0.66, na.rm = TRUE)
+```
+
+```{r}
+tree_clean.nb$review_scores_rating <- cut(tree_clean.nb$review_scores_rating, breaks = c(0, 4.6381, 4.86, 5),
+                  labels = c("Low", "Medium", "High"),
+                  include.lowest = TRUE)
+tree_clean.nb %>% count(review_scores_rating)
+```
+From the binning results we can see that in the review_scores_rating column, there are currently 316 rows belong to Low, 335 rows belong to Medium, 307 rows belong to High. I think such a binning situation is reasonable.
+In order to build a better classification tree model, some columns including name, neighborhood_overview, amenities, bath_type are removed since they are useless for buliding the tree and all remaining numerical types are converted to integer to reduce runtime.
+
+```{r}
+str(tree_clean.nb)
+```
+
+```{r}
+tree_clean.nb <- subset(tree_clean.nb, select = -c(name, amenities, bath_type,host_acceptance_rate))
+
+tree_clean.nb$neighbourhood_cleansed<-as.factor(tree_clean.nb$neighbourhood_cleansed)
+tree_clean.nb$host_response_time<-as.factor(tree_clean.nb$host_response_time)
+tree_clean.nb$property_type<-as.factor(tree_clean.nb$property_type)
+tree_clean.nb$room_type<-as.factor(tree_clean.nb$room_type)
+tree_clean.nb$neighborhood_overview <- as.integer(tree_clean.nb$neighborhood_overview)
+tree_clean.nb$latitude <- as.integer(tree_clean.nb$latitude)
+tree_clean.nb$longitude <- as.integer(tree_clean.nb$longitude)
+tree_clean.nb$accommodates <- as.integer(tree_clean.nb$accommodates)
+tree_clean.nb$bedrooms <- as.integer(tree_clean.nb$bedrooms)
+tree_clean.nb$beds <- as.integer(tree_clean.nb$beds)
+tree_clean.nb$price <- as.integer(tree_clean.nb$price)
+tree_clean.nb$minimum_nights <- as.integer(tree_clean.nb$minimum_nights)
+tree_clean.nb$maximum_nights <- as.integer(tree_clean.nb$maximum_nights)
+tree_clean.nb$availability_365 <- as.integer(tree_clean.nb$availability_365)
+tree_clean.nb$number_of_reviews <- as.integer(tree_clean.nb$number_of_reviews)
+tree_clean.nb$reviews_per_month <- as.integer(tree_clean.nb$reviews_per_month)
+```
+
+```{r}
+set.seed(330)
+tree_train <- sample_frac(tree_clean.nb, 0.6)  #Randomly selects 60% of rows from the dataset
+tree_valid <- setdiff(tree_clean.nb, tree_train) #Sends the other rows to validation set, with no overlap
+```
+
+```{r}
+library(rpart)
+tree_ct <- rpart(data=tree_train, 
+            formula=review_scores_rating~.,
+            method = "class",
+            minsplit=3,
+            cp = 0,
+            xval = 5)
+tree_ct
+```
+
+```{r}
+printcp(tree_ct)
+```
+
+### B.Determint the ideal size of the tree using cross-validation
+```{r}
+tree_best <- tree_ct$cptable[which.min(tree_ct$cptable[,"xerror"]),"CP"]
+```
+With the resutl of cross-validation, we can see that with CP value is 0.01072386, we can get the lowest cross-validation error equal to 0.85255 and then pruned the tree to remove some subtrees that are redundant and useless for our model.
+
+```{r}
+pruned_tree <- prune(tree_ct, cp=tree_best)
+pruned_tree
+```
+
+### C.Tree model with rpart.plot function
+```{r}
+library(rpart.plot)
+rpart.plot(pruned_tree, type = 4, extra = 109, fallen.leaves = TRUE)
+```
+And this is the final classification tree we get, and we can use this model to make predictions for review_scores_rating For example, from the top of the tree, if number_of_reviews is bigger then 19 then go left, if accommodates is less then 7, then go right, finally we can make prediction that review_scores_rating would be Medium. 
+
+```{r}
+tree_pred <- predict(pruned_tree, newdata=tree_valid[,-18],type="class")
+tree_pred
+```
+
+```{r}
+confusionMatrix(data = tree_valid$review_scores_rating, reference = tree_pred)
+```
+Through the prediction results, we found that the accuracy we got so far is low, so we tried for example reducing the number of variables when construct the tree, or changing the number of bins, but at the end the accuracy is not improved, we think this may be related to too many levels of data, but too little data, so in real life, if we want to get a more accurate model, we need to have more data.
+
+##STEP 4: CLUSTERING
+### Load data and limit to Châtelet - Les Halles - Beaubourg
+```{r}
+clu_paris.nb <- read_csv("~/Desktop/BU-MSBA/Spring 2022/AD699 A2 Data Mining/Final Project/paris_listings.csv")
+clu_paris.nb <- clu_paris.nb %>% filter(host_neighbourhood=="Châtelet - Les Halles - Beaubourg")
+set.seed(699)
+```
+
+### Drop three variables: neighbourhood_group_cleansed, bathrooms, and calendar_updated.
+```{r}
+clu_paris.nb <- subset(clu_paris.nb, select = -c(neighbourhood_group_cleansed,
+                                                     bathrooms,
+                                                     calendar_updated))
+```
+refer to explamnation in solution before (taks 1)
+
+### Convert selected variables for to numeric variables and remove $ and % signs
+```{r}
+clu_paris.nb$bedrooms <- as.numeric(clu_paris.nb$bedrooms)
+clu_paris.nb$number_of_reviews <- as.numeric(clu_paris.nb$number_of_reviews)
+clu_paris.nb$host_listings_count <- as.numeric(clu_paris.nb$host_listings_count)
+clu_paris.nb$price <- as.numeric(clu_paris.nb$price)
+clu_paris.nb$host_acceptance_rate <- as.numeric(clu_paris.nb$host_acceptance_rate)
+```
+Then, we want to keep NAs of these variables: description (6), neighborhood_overview (416), host_location (2), host_about (429), and neighborhood (416). Because all of these are characters, and some are descriptions which are unique. Hence, we think it'better to keep them.
+
+```{r}
+table(clu_paris.nb$bedrooms, useNA="ifany")
+clu_paris.nb$bedrooms[is.na(clu_paris.nb$bedrooms)] <- round(mean(clu_paris.nb$bedrooms, na.rm=TRUE))
+```
+For bedrooms which is a numeric variable, most of records are "1", and there are 256 NAs (23%). We replaced these NAs with average value.
+
+### Replace bedroom variable with average value (since there are to many Na's = 256)
+```{r}
+table(clu_paris.nb$beds, useNA="ifany")
+mode <- function(v) {
+  uniqv <- unique(v)
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+clu_paris.nb$beds[is.na(clu_paris.nb$beds)] <- mode(clu_paris.nb$beds)
+clu_paris.nb <- clu_paris.nb[!(is.na(clu_paris.nb$review_scores_value)),]
+```
+Although license is numeric, but it's kind of character. We think we could drop it or keep it. 
+
+```{r}
+colSums(is.na(clu_paris.nb))
+```
+
+### Second Data cleaning:
+Since there are too many variables, we want to generally decide whether some variables are useless, then we could drop them directly. 
+
+host_neighbourhood, latitude, longitude, property_type, neighborhood_overview, price (accommodates, bedrooms, beds), amenities, instant_bookable, review_scores_rating (no other review scores)
+
+```{r}
+cluster.nb <- select(clu_paris.nb, name, host_response_time, host_acceptance_rate, neighbourhood_cleansed, property_type, room_type, accommodates,bathrooms_text, bedrooms, beds, price, availability_365, number_of_reviews, review_scores_rating, reviews_per_month, host_is_superhost)
+```
+
+### Change bathroom variable Half-bath = 0.5 bath, Shared half-bath = 0.5 shared bath
+```{r}
+cluster.nb$bathrooms_text[cluster.nb$bathrooms_text=='Half-bath'] <- "0.5 bath"
+cluster.nb$bathrooms_text[cluster.nb$bathrooms_text=='Shared half-bath'] <- "0.5 shared bath"
+cluster.nb <- cluster.nb %>% separate(bathrooms_text, c("bathrooms","bath_type"), sep=" ")
+cluster.nb$bathrooms <- as.numeric(cluster.nb$bathrooms)
+```
+
+```{r}
+colSums(is.na(cluster.nb))
+```
+
+### Host acceptance rate:
+```{r}
+#average of host acceptance rate
+cluster.nb$host_acceptance_rate[is.na(cluster.nb$host_acceptance_rate)] <- round(mean(cluster.nb$host_acceptance_rate, na.rm=TRUE))
+```
+since host acceptance rate give a valuable insight in how often a reservations is accepted or declined we formed a mean value of it to not lose 344 data points in our selected cluster set. 
+
+```{r}
+#scaling the data
+str(cluster.nb)
+
+cluster.nb.scaled <- sapply(cluster.nb[, c(3,7,8, 10:16)],scale)
+
+#show data
+head(cluster.nb.scaled)
+```
+The scale of the variables in this dataset is not the same. If this remains adjusted then the model is likely to be biased towards one of the variables with a higher magnitude. To avoid this the data can be scaled. We can only scale numeric values
+
+
+### Build hiracical clsuter model
+```{r}
+library(factoextra)
+#cluster by method average
+clusterdf <- hclust(dist(cluster.nb.scaled), method = "average")
+fviz_dend(clusterdf, cex = 0.5, lwd = 0.7)
+```
+
+```{r}
+#cluster by method ward.D 
+clusterdf <- hclust(dist(cluster.nb.scaled), method = "ward.D")
+fviz_dend(clusterdf, cex = 0.5, lwd = 0.7,k=5,
+          k_colors = c("aaas"),
+          rect = TRUE, 
+          rect_border = "aaas",
+          rect_fill = TRUE)
+```
+k=5
+
+### Build model for k = 5 clusters bsaed on ward.d dendogram
+```{r}
+#make cut for k = 5 at the cutoff point below 100
+cluster <- cutree(clusterdf, k=5)
+cluster
+```
+
+### Descritpion of Method:
+For the hierarchical clustering character variables have changed into numeric ones. By reviewing the Airbnb homepage I realized that for booking an accommodation variables as Price, Host acceptance rate, the number of bedrooms, bathrooms, the average review score and the total number of reviews plays an important role for me. Therefore those variables have been selected for the further process. Also the availability and number of reviews per month have been added to get a better insight in the availability of the accommodations.
+
+To determine the number of clusters two different dendogramm methods have been used. First, I used the average method to get a first impression of how the clusters are look like. Since this dendogram was hard to interpret and also hard to say where the cutoff should be made the ward.D method was used for the second one. The ward.D method is agglomerative where it joins records and clusters together progressively to produce larger and larger clusters. By doing to it considers the “loss of information” that occurs when records are clustered together. When records are joined together and represented in clusters, information about an individual record is replaced by the information for the cluster to which it belongs. For the cutoff at k=5 (at a height of about 130) a reasonable number of cluster have been found. This number of clusters is not to high and not to small, since to many clusters are not useful, because it makes the analysis less transparent and also more complicated.
+
+### Attach the assigned cluster numbers back to the original dataset
+```{r}
+cluster.nb$Cluster <- cluster
+group1<-group_by(cluster.nb, Cluster)
+#show average value of cluster
+summarize_if(group1, is.numeric,mean)
+```
+Cluster 1: 2nd highest host acceptance_rate, 2nd highest accommodates, 1 bathroom, 1 bedroom with average 1.7 beds, 2nd lowest price on average, 2nd highest availability over the year, outstanding high number of reviews, highest review score_rating, highest reviews per month
+
+Cluster 2: 3rd highest host acceptance_rate, 3rd highest accommodates, 1 bathroom, 1 bedroom with average of 1.5 beds, 2nd highest price on average, outstanding highest availability over the year, middle number of reviews, reviews_per-month in the middle compare to the other clusters.
+
+Cluster 3: 2nd highest host acceptance_rate, 2nd lowest accommodates, 1 bathroom, 1 bedroom with average of 1.5 beds, middle price on average (by rank), outstanding lowest availability over the year, lowest number of reviews + score_rating, 2nd lowest reviews_per_month.
+
+Cluster 4: outstanding lowest host acceptance_rate, lowest accommodates, 1 bathroom, 1 bedroom with average of 1.3 beds, lowest price on average (by rank), 2nd lowest availability over the year, 2nd lowest number of reviews + score_rating and lowest reviews_per_month.
+
+Cluster 5: 2nd lowest host acceptance_rate, highest accommodates, highest number of bathrooms, bedrooms and beds (almost 2 bathroom , 2.7 bedroom with average of 4 beds), highest price on average, middle availability over the year, 2nd highest number of reviews, middle score_rating and 2nd highest reviews_per-month
+
+```{r}
+#show minimum value of cluster
+summarize_if(group1, is.numeric,min)
+```
+
+```{r}
+#show maximum value of cluster
+summarize_if(group1, is.numeric,max)
+```
+
+### Description of Clusters:
+
+### Cluster 1: "Low budget - Safe and sound"
+In the first cluster we find a very high host_acceptance rate and accommodates (2nd highest for both). It has a high availability over the year and the 2nd lowest price ($ 112.31) on overage among all clusters. It has  1 it also has 1 bathroom 1 bedroom and average of 1.5 beds. Unique for this cluster is the outstanding high number of total reviews as well as the highest number for review score rating and reviews per month
+
+### Cluster 2: "Your Last minute choice"
+The second cluster has an outstanding high availability over the year, with the 2nd highest price on average ($ 135.93). Similar to cluster 1 it also has 1 bathroom 1 bedroom and average of 1.5 beds. The difference compare to cluster 1 is a lower host acceptance rad and lower accommodates.
+
+### Cluster 3: "Secret surprise"
+The third cluster stands out for the overall low availability over the year the low number of reviews and score rating and 2nd lowest reviews_per_month. Bedroom, beds and bathroom look similar to cluster 1 and 2. The price of this cluster is just a little bit higher than cluster 1 ($2). Different to the two clusters before cluster 3 has the 2nd lowest host acceptance rate and accommodates.
+
+### Cluster 4: "Low Price Pitfall" 
+This is the cluster with the lowest host acceptance_rate and lowest accommodates. Similar to the clusters before it has 1 bathroom, 1 bedroom but with a little bit lower average of 1.3 beds. This cluster shows the 2nd lowest availability over the year, 2nd lowest number of reviews as well as score_rating. Unique compare the the other clusters this has the lowest price on average
+
+### Cluster 5: "Big Travelgroup/ Family Vacation choice"
+In this cluster we find the highest number of bathrooms, bedrooms and beds (almost 2 bathroom , 2.7 bedroom with average of 4 beds). This comes along with the highest price for all clusters. The reviews_per-month and number of reviews are the 2nd highest, while the availability over the year and the score rating is between the one of cluster 1 + 4.
+
+### Visualize clusters
+```{r}
+#factor clusters
+cluster.nb$Cluster<-as.factor(cluster.nb$Cluster)
+```
+
+```{r}
+#Availability per cluster
+ggplot(data=cluster.nb, aes(y=availability_365, x=cluster, fill=Cluster)) + 
+  geom_bar(stat="identity") + labs(x="Cluster", y="Available Days per year")+ggtitle("Availability: Cluster")
+```
+
+```{r}
+#Price distribution of Clusters
+ggplot(cluster.nb, aes(x=cluster, y=price, group = cluster)) + geom_violin(width=1, color="red") + geom_boxplot(width=0.25, color="black", alpha=0.2) + ggtitle("Violin plot and Boxplot: Price") + labs(y="Price in $", x="Cluster")
+```
+
+```{r}
+#Average Review Scores per cluster
+score <- ggplot(data=cluster.nb, aes(y=review_scores_rating, x=cluster, fill=Cluster)) + 
+  geom_bar(stat="identity") + labs(x="Cluster", y="Average Rating Score")+ggtitle("Average Rating Score: Cluster")
+score
+```
+
+```{r}
+#Number of Reviews per Cluster
+n_review <- ggplot(data=cluster.nb, aes(y=number_of_reviews, x=cluster, fill=Cluster)) + 
+  geom_bar(stat="identity") + labs(x="Cluster", y="Number of Reviews per Cluster")+ggtitle("Number of Reviews: Cluster")
+n_review
+```
+
+```{r}
+# Number of Bedrooms per cluster
+n_bed <- ggplot(data=cluster.nb, aes(y=bedrooms, x=cluster, fill=Cluster)) + 
+  geom_bar(stat="identity") + labs(x="Cluster", y="Number of Bedrooms")+ggtitle("Number of Bedrooms: Cluster")
+n_bed
+```
+
+```{r}
+# Number of Bathrooms per cluster
+n_bath <- ggplot(data=cluster.nb, aes(y=bathrooms, x=cluster, fill=Cluster)) + 
+  geom_bar(stat="identity") + labs(x="Cluster", y="Number of Bathrooms")+ggtitle("Number of Bathrooms: Cluster")
+n_bath
+```
+
+```{r}
+library(ggpubr)
+conclusion <- ggarrange(score, n_review, n_bed, n_bath,
+                    ncol = 2, nrow = 2)
+conclusion
+```
+
+### Explanation of Visualizations
+### Baplot: Availabile Days per year for each cluster
+This barplot shows the clusters on the x-axis and the number of available days on the y-axis. The clusters are color coded. It can be seen that cluster 2 has the highest availability of days per year. Cluster 3 and 4 show a similar availability, while cluster 4 has the lowest compare to them. Cluster 1 is between cluster 3 and cluster 4
+
+### Violin plot and Boxplot: Price
+This visualization combines a boxplot with a scatterplot. Both show the distribution of prices within a cluster. The boxplot indicates the mean as well as the observations between the 25th and the 75th percentile. The violin also includes all observations. All clusters show at least one outlier out of the boxplot. The eye catching observation is that cluster 5 has the highest price compare to the others and also some outlines outside the boxplot. 
+
+### Combinde Barplots for Review Score, Number of Reviews, Bedrooms and Bathrooms
+The third visualization combines four different barplots. All barplots have the cluster on the x-axis. The barplots show the average review score, number of reviews, number of bedrooms and number of bathrooms on the y-axis. The main observation is that cluster 3 has the highest value in all four clusters, while cluster 4 has the lowest value in each plot among all clusters. Cluster 1 has only a high value  for the total number of reviews (2nd highest, almost as cluster 3), while being similar in the other three plots as cluster 1. Cluster 2 and 5 show similar total number of reviews and bathrooms. They differ for average rating score, where cluster 2 is higher than cluster 5 as well as for number fo bedrooms, where cluster 5 is higher than cluster 2.
+
+##STEP 5: CONCLUSIONS
+
+## Describes your overall process and experience with this assignment.
+In the following the conclusion of our findings for the Airbnb neighborhood Châtelet - Les Halles – Beaubourg in Paris is presented. The project started with getting an overview of the dataset, identify useful and unimportant variables for our later analysis steps. To do so we started with a data cleaning to reduce the number of variables. With an unfamiliar data frame and 74 variables, we did not have a clue at first. We discussed the different approaches of each member for the data cleaning step and selected the best ideas to lay a good foundation for the next steps of visualizations and models. Afterwards the task in the dataset have been split up to group members by interest. In several meetings we shared our codes and logic with our group members and asked for help to solve problems. We also conduct peer evaluation with each other to avoid mistakes to the greatest extent possible. Compared to previous assignments this semester, this project gave us a greater degree of freedom and the chance to implement all the gained knowledge in the process of data mining. We used the video library as well as previous assignments for reference and learned how to apply all of the methods and concepts into one combined project. Beneficial to this process was the different perspectives of group members how to deal with problems. The wisdom of the group helped in each step to solve problems optimize code and produce better results. Throughout this project we not only gained a deeper grasp of what we had learned this semester in the assignments and quizzes, but also learned how to work together efficiently in groups. This included to have a proper project time management as well as checking each other’s group work to keep the right focus on the tasks and overall results.
+
+## How could these findings be useful? 
+First, in the future, we will have more experience in collaborating in groups especially for larger projects with multiple people and personalities to complete projects more efficiently and accurately. In lights of the different tasks, we will have a multi-dimensional perspective to think about the problem and solve it in a more flexible way.
+
+## Who could benefit from the data mining that you have performed here?
+First, Airbnb can greatly benefit from our data mining. Airbnb can use the models to get a better understanding of their business, the important values of customers and how house owners, allocate resources to highlight their market competitiveness. Through our provided models they can better predict market prices, look out for nearest neighbors for specific units in a neighborhood. Furthermore, the provided classification, decision tree and clustering help to identify specific groups of Airbnb unit sets ups and their specific composition. This helps Airbnb to set specific focus for those groups and enables to lay out a more effective and efficient marketing and promotion for different customer target groups. In addition, Airbnb’s competitors, such as Booking.com, can use our data to compare their properties with Airbnb’s and set prices that are advantageous to them or capture market share where Airbnb has insufficient control. Finally, all house owning and renting company know who to contact, when seeing this model: Team Awesome.
